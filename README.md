@@ -1,7 +1,7 @@
 # Prompt Compression
 
 how to run code:
-- git clone https://github.com/ManasviGoyal/Wrapper-Wrapper.git
+- git clone <link>
 - python3.11 -m venv hack-env
 - source hack-env/bin/activate
 - pip install -r requirements.txt
