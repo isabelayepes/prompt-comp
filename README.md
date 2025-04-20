@@ -20,9 +20,5 @@ how to run code:
 Find your API key following instructions here: 
     https://github.com/anthropics/courses/blob/master/anthropic_api_fundamentals/01_getting_started.ipynb
 
-
-To run demo:
-    python acbud_demo.py
-
-To run working api call prototype
+To run api call prototype:
     python acbud_api_proto.py
