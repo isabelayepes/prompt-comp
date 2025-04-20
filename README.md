@@ -1,5 +1,8 @@
 # AcBud: Applied Prompt Compression
 By Isabela Yepes and Eric Tang
+For the Anthropic Hackathon 2025
+
+AcBud: Accountability Buddy
 
 how to run code:
 - git clone (link)
