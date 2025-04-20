@@ -1,4 +1,5 @@
 # AcBud: Applied Prompt Compression
+By Isabela Yepes and Eric Tang
 
 how to run code:
 - git clone (link)
