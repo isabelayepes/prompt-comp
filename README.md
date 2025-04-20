@@ -1,4 +1,4 @@
-# Prompt Compression
+# AcBud: Applied Prompt Compression
 
 how to run code:
 - git clone (link)
@@ -10,5 +10,14 @@ how to run code:
 - create a .gitignore file and add:
     .env
     hack-env
+    .DS_Store
 
-Find your API key following instructions here: https://github.com/anthropics/courses/blob/master/anthropic_api_fundamentals/01_getting_started.ipynb
+Find your API key following instructions here: 
+    https://github.com/anthropics/courses/blob/master/anthropic_api_fundamentals/01_getting_started.ipynb
+
+
+To run demo:
+    python acbud_demo.py
+
+To run working api call prototype
+    python acbud_api_proto.py
