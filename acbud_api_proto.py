@@ -3,29 +3,31 @@ from anthropic import Anthropic
 from dotenv import load_dotenv
 import os
 
-# Load environment variables (ANTHROPIC_API_KEY should be set in your .env file)
 load_dotenv()
-
-# Initialize the Anthropic client; it will automatically use the API key from the environment
 client = Anthropic()
 
 # ------------------------------------------------------------------------------
 # P0 Template and Compression Prompt (C)
 # ------------------------------------------------------------------------------
-P0_TEMPLATE = """You are an AI accountability buddy designed to help users achieve their health and wellbeing goals. Your role is to provide support, guidance, and personalized recommendations based on the user's input and progress. You will be working with the following information:
+P0_TEMPLATE = """You are an AI accountability buddy designed to help users achieve their health and wellbeing goals. 
+Your role is to provide support, guidance, and personalized recommendations based on the user's input and progress.
+If the plans tags are empty and the desired-action tags say: [Suggest an initial plan], 
+then it is the first session and you must suggest self improvement plans based on the other information you have about the user.
+
+<desired-action>[Suggest an initial plan]</desired-action>
 
 <context_variables>
-wish/goal: {goal}
-outcome/visualization/motivation: {outcome}
-obstacles: {obstacles}
-plan: <if empty, suggest plans>
+    <goal>{goal}</goal>
+    <motivation>{outcome}</motivation>
+    <obstacles>{obstacles}</obstacles>
+    <plans></plans>
 </context_variables>
 
 These context variables include:
 •⁠ wish/goal: The user's primary goal or wish
 •⁠ outcome/visualization/motivation: The user's desired outcome, visualization, or motivation
 •⁠ obstacles: Potential challenges or obstacles in the way of achieving the goal
-•⁠ plan: Approved actionable steps to achieve the goal
+•⁠ plans: Approved actionable steps to achieve the goal
 
 <timeline></timeline>
 
@@ -98,8 +100,13 @@ When interacting with the user, follow these guidelines:
      Welcome back, <name></name>! [Personalized question or encouragement based on their goal and recent progress]
      </proactive_followup>"""
 
-C = """<prompt> # Meta Prompt for Prompt Compression
-You are a prompt compression specialist. Your task is to compress the input prompt using hierarchical structuring and dictionary reference techniques while preserving all functional requirements and essential instructions.
+C = """<prompt> # Meta Prompt for Prompt Concatenation and Compression
+You are the prompt context updater and prompt compression specialist for the accountability buddy's prompt. 
+You must update the original prompt with the new information, particularly where tags are missing information. 
+Based on the user's response, update context contained within the relevant tags. 
+Remember the goal is for the next accountability buddy to be able to follow up.
+You must also compress the input prompt using hierarchical structuring and dictionary reference techniques below while preserving all functional requirements and essential instructions. 
+
 Compression Instructions
 1. Apply Dictionary References:
     * Identify recurring concepts, formats, and instructions
@@ -109,7 +116,7 @@ Compression Instructions
     * Organize information into logical categories and subcategories
     * Use headers, subheaders, and indentation to show relationships
     * Group related concepts to reduce redundancy
-3. Preserve Essential Elements:
+3. Preserve Old and Add New Essential Elements:
     * Maintain all critical instructions that affect functionality
     * Keep all required data structures, tags, and formatting specifications
     * Ensure the compressed prompt produces identical outputs to the original
@@ -117,6 +124,7 @@ Compression Instructions
     * Use concise language and remove unnecessary words
     * Convert paragraphs to bullet points where appropriate
     * Maintain readability for humans while compressing
+
 Output Format
 The compressed prompt should:
 * Begin and end with <prompt> tags
@@ -124,23 +132,20 @@ The compressed prompt should:
 * Preserve all functional XML tags from the original prompt
 * Organize information using # and ## markdown headers
 * Present the compression with clear visual hierarchy
-* Reduce length by approximately 40-60% while maintaining full functionality
+* Reduce length as possible while maintaining full functionality
 Remember: The compressed prompt will be used directly with an AI system with no additional context or information, so it must be complete and self-contained. </prompt>"""
 
 # ------------------------------------------------------------------------------
 # Revised API call using Anthropic SDK
 # ------------------------------------------------------------------------------
-def call_claude_api(prompt, model="claude-3-haiku-20240307", max_tokens=300, temperature=0):
-    """
-    Calls the Anthropic Claude API using the official SDK.
-    The client automatically uses your API key from the environment.
-    """
+
+def call_claude_api(prompt, model="claude-3-7-sonnet-20250219", max_tokens=2000, temperature=0.1):
     try:
         response = client.messages.create(
             model=model,
             max_tokens=max_tokens,
             temperature=temperature,
-            system="You are an expert in facilitating conversations for an accountability buddy.",
+            system="This is part of an accountability buddy chat service.",
             messages=[{"role": "user", "content": prompt}]
         )
         return response.content[0].text.strip()
@@ -152,91 +157,122 @@ def call_claude_api(prompt, model="claude-3-haiku-20240307", max_tokens=300, tem
 # ------------------------------------------------------------------------------
 
 def initial_turn_custom(goal, outcome, obstacles):
-    """
-    For the first interaction:
-    - Uses user-provided goal, outcome, and obstacles to fill the P0 template.
-    - Sends the customized prompt to Claude to obtain the initial bot output (O₀).
-    - Returns the full conversation state (customized P0 + O₀) and O₀.
-    """
     P0_custom = P0_TEMPLATE.format(goal=goal, outcome=outcome, obstacles=obstacles)
     bot_output = call_claude_api(P0_custom)
-    conversation = P0_custom + "\n" + bot_output
-    return conversation, bot_output
+    internal_context = P0_custom
+    combined = f"{P0_custom}\nAssistant's output: {bot_output}"
+    return internal_context, bot_output, combined
 
-def next_turn(user_input, conversation):
+def extract_cleaned_compressed_prompt(model_output):
     """
-    For subsequent interactions:
-    1. Concatenate the current conversation state with the user's input.
-    2. Prepend the compression prompt (C) to produce a combined prompt.
-    3. Call the Claude API with the combined prompt to compress/update the context.
-    4. Use the new context to generate the bot's next response.
-    5. Return the updated conversation state and bot response.
+    Extracts the cleaned prompt by removing everything before the first <prompt> tag.
+    Returns the full <prompt> block, or a fallback message if not found.
     """
-    combined = conversation + "\n" + user_input
-    compression_input = C + "\n" + combined
-    new_context = call_claude_api(compression_input)
-    bot_response = call_claude_api(new_context)
-    updated_conversation = new_context + "\n" + bot_response
-    return updated_conversation, bot_response
+    tag = "<prompt>"
+    idx = model_output.find(tag)
+    if idx != -1:
+        return model_output[idx:].strip()
+    else:
+        # Fall back if the model didn't format correctly
+        return "(<compressed prompt>" + model_output.strip()
 
-# ------------------------------------------------------------------------------
-# Gradio UI Setup
-# ------------------------------------------------------------------------------
+def next_turn(user_input, internal_context):
+    combined_uncompressed = internal_context + "\nUser's input: " + user_input
+    compression_input = C + "\n" + combined_uncompressed
+    compressed_context_response = call_claude_api(compression_input)
+
+    cleaned_compressed_context = extract_cleaned_compressed_prompt(compressed_context_response)
+
+    bot_response = call_claude_api(cleaned_compressed_context)
+
+    combined_uncompressed += f"\nAssistant's output: {bot_response}"
+
+    return cleaned_compressed_context, bot_response, combined_uncompressed, compressed_context_response
+
+
+# -------------------------
+# Gradio UI Definition here
+# -------------------------
 
 with gr.Blocks() as demo:
     gr.Markdown("# Acbud: Your AI Accountability Buddy")
-    gr.Markdown("This app uses Anthropic Claude as an accountability buddy. Your API key should be set in your environment (ANTHROPIC_API_KEY).")
-    
+    gr.Markdown("Set your ANTHROPIC_API_KEY in your environment.")
+
     with gr.Column():
         gr.Markdown("## Tell us about yourself")
         user_goal = gr.Textbox(label="Your Goal/Wish", placeholder="Enter your primary goal")
-        user_outcome = gr.Textbox(label="Desired Outcome/Motivation", placeholder="Enter your desired outcome or motivation")
+        user_outcome = gr.Textbox(label="Desired Outcome/Motivation", placeholder="Enter your desired outcome")
         user_obstacles = gr.Textbox(label="Obstacles", placeholder="Enter potential obstacles")
-        start_btn = gr.Button("Start my accountability journey")
-    
-    # Hidden variable to maintain the conversation state
-    conversation_state = gr.State("")
-    
-    # Chat display: a list of (speaker, message) tuples
-    chatbot = gr.Chatbot()
-    
-    # Input textbox and submit button for subsequent messages
+        start_btn = gr.Button("Accountability now!")
+
+    internal_context_state = gr.State("")
+    chatbot = gr.Chatbot(type="messages")
+
     user_message = gr.Textbox(label="Your Message", placeholder="Type here...")
-    submit_btn = gr.Button("Submit")
-    
+    submit_btn = gr.Button("Submit Message")
+
+    with gr.Tab("Under the Hood"):
+        gr.Markdown("## Prompt Compression Details")
+
+        with gr.Row():
+            with gr.Column():
+                word_count_uncompressed = gr.Markdown("**Word Count:** 0")
+                P_i_display = gr.Textbox(label="Uncompressed Prompt (Pᵢ + Oᵢ + Iᵢ)", lines=15, interactive=False)
+
+            with gr.Column():
+                gr.Markdown(
+                    "<div style='text-align: center; font-size: 36px; margin-top: 40px;'>"
+                    "➡<br/><i>Compression</i></div>"
+                )
+
+            with gr.Column():
+                word_count_compressed = gr.Markdown("**Word Count:** 0")
+                P_prime_i_display = gr.Textbox(label="Compressed Prompt C(Pᵢ+Oᵢ+Iᵢ)", lines=15, interactive=False)
+
+    def update_word_counts(uncompressed, compressed):
+        uncompressed_count = len(uncompressed.split())
+        compressed_count = len(compressed.split())
+        return (f"**Word Count:** {uncompressed_count}",
+                f"**Word Count:** {compressed_count}")
+
+    # Define interactions
     def start_journey(goal, outcome, obstacles):
-        """
-        Initializes the conversation using the custom P0 template with user inputs.
-        Returns the conversation state and displays the initial bot output.
-        """
-        conv_state, bot_msg = initial_turn_custom(goal, outcome, obstacles)
-        chat_history = [("Acbud", bot_msg)]
-        return conv_state, chat_history
+        internal_context, bot_msg, combined_uncompressed = initial_turn_custom(goal, outcome, obstacles)
+        chat_history = [{"role": "assistant", "content": bot_msg}]
+        compressed_initial = "(Not compressed yet)"
+        counts = update_word_counts(combined_uncompressed, compressed_initial)
+        return internal_context, chat_history, combined_uncompressed, compressed_initial, *counts
     
-    def interact(user_msg, conv_state):
-        """
-        Processes a subsequent turn.
-        If the conversation has been started, it appends the new user input,
-        updates the conversation state via next_turn(), and returns the bot response.
-        If no conversation state is present, prompts the user to start the journey first.
-        """
-        if not conv_state:
-            return conv_state, [("System", "Please start your journey by entering your details and clicking the 'Start my accountability journey' button.")]
-        conv_state, bot_msg = next_turn(user_msg, conv_state)
-        chat_history = [(f"User", user_msg), ("Acbud", bot_msg)]
-        return conv_state, chat_history
-    
-    # Wire up the buttons with their callbacks.
+    def interact(user_msg, internal_context):
+        cleaned_compressed_context, bot_msg, combined_uncompressed, compressed_context = next_turn(user_msg, internal_context)
+        chat_history = [
+            {"role": "user", "content": user_msg},
+            {"role": "assistant", "content": bot_msg}
+        ]
+        counts = update_word_counts(combined_uncompressed, compressed_context)
+        
+        return (cleaned_compressed_context, chat_history, combined_uncompressed, compressed_context, *counts, "")
+
+    # Wire up buttons
     start_btn.click(
         start_journey,
         inputs=[user_goal, user_outcome, user_obstacles],
-        outputs=[conversation_state, chatbot]
+        outputs=[internal_context_state, chatbot, P_i_display, P_prime_i_display, word_count_uncompressed, word_count_compressed]
     )
-    
+
     submit_btn.click(
         interact,
-        inputs=[user_message, conversation_state],
-        outputs=[conversation_state, chatbot]
+        inputs=[user_message, internal_context_state],
+        outputs=[
+            internal_context_state,
+            chatbot,
+            P_i_display,
+            P_prime_i_display,
+            word_count_uncompressed,
+            word_count_compressed,
+            user_message  # <-- clears this textbox after submission
+        ]
     )
+
 
 demo.launch()
